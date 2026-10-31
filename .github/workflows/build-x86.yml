@@ -30,42 +30,41 @@ jobs:
         working-directory: /workdir
         run: |
           df -hT $PWD
-          # 克隆作者配置好的 immortalwrt 源码
           git clone https://github.com/fndsz/immortalwrt-23.05.4 -b master openwrt
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-      - name: Load custom feeds and config
+      - name: Load custom feeds
         run: |
-          cd openwrt
-          [ -e $GITHUB_WORKSPACE/feeds.conf.default ] && mv $GITHUB_WORKSPACE/feeds.conf.default feeds.conf.default
-          
-          # 运行作者的脚本1（拉取MMDVM源码，打补丁等）
+          [ -e $GITHUB_WORKSPACE/feeds.conf.default ] && mv $GITHUB_WORKSPACE/feeds.conf.default openwrt/feeds.conf.default
           chmod +x $GITHUB_WORKSPACE/diy-part1.sh
+          cd openwrt
           $GITHUB_WORKSPACE/diy-part1.sh
-          
-          # 更新依赖源
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
 
-      - name: Load configuration and run script 2
+      - name: Update feeds
+        run: cd openwrt && ./scripts/feeds update -a
+
+      - name: Install feeds
+        run: cd openwrt && ./scripts/feeds install -a
+
+      - name: Load custom configuration
         run: |
           cd openwrt
           
-          # 核心改动：使用刚才改过的 76x8.config 作为基础，但强行覆盖为 X86 架构
-          cp $GITHUB_WORKSPACE/76x8.config .config
+          # 使用默认配置作为打底
+          make defconfig
           
-          # 覆盖架构为 X86_64
+          # 核心修改：清除默认架构，强行切到 X86_64
           sed -i 's/CONFIG_TARGET_ramips=y/# CONFIG_TARGET_ramips is not set/' .config
           sed -i 's/CONFIG_TARGET_ramips_mt76x8=y/# CONFIG_TARGET_ramips_mt76x8 is not set/' .config
           echo "CONFIG_TARGET_x86=y" >> .config
           echo "CONFIG_TARGET_x86_64=y" >> .config
           echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
           
-          # 运行作者的脚本2（处理各种特殊依赖和打包逻辑）
+          # 运行你的脚本注入 MMDVM 相关配置
           chmod +x $GITHUB_WORKSPACE/mmdvmipk.sh
           $GITHUB_WORKSPACE/mmdvmipk.sh
           
-          # 自动生成最终配置
+          # 刷新并确认最终配置
           make defconfig
 
       - name: Download package
@@ -77,11 +76,10 @@ jobs:
         run: |
           cd openwrt
           echo -e "$(nproc) thread compile"
-          make -j$(nproc) || make -j1 V=s
+          make -j$(nproc) || make -j1 || make -j1 V=s
 
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
           name: OpenWrt-X86-MMDVM-Firmware
-          # 提取最终的刷机包
           path: openwrt/bin/targets/x86/64/*.img.gz
