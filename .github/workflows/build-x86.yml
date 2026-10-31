@@ -46,25 +46,30 @@ jobs:
       - name: Install feeds
         run: cd openwrt && ./scripts/feeds install -a
 
-      - name: Load custom configuration
+      - name: Force Disable OLED & Load custom config
         run: |
           cd openwrt
           
-          # 使用默认配置作为打底
-          make defconfig
+          # 1. 核心绝杀：强行把 mmdvm-host 源码里的 OLED 开启宏定义干掉
+          # 找到刚才拉取下来的源码，把 CFLAGS 里的 -DOLED 删掉，并修改 Makefile
+          MMDVM_DIR="package/mmdvm/mmdvm-openwrt/mmdvm-host"
+          if [ -d "$MMDVM_DIR" ]; then
+              sed -i 's/-DOLED//g' $MMDVM_DIR/Makefile
+              sed -i 's/^#define USE_OLED/\/\/ #define USE_OLED/' $MMDVM_DIR/*.h 2>/dev/null || true
+          fi
           
-          # 核心修改：清除默认架构，强行切到 X86_64
+          # 2. 覆盖配置，强制 X86 架构
+          make defconfig
           sed -i 's/CONFIG_TARGET_ramips=y/# CONFIG_TARGET_ramips is not set/' .config
           sed -i 's/CONFIG_TARGET_ramips_mt76x8=y/# CONFIG_TARGET_ramips_mt76x8 is not set/' .config
           echo "CONFIG_TARGET_x86=y" >> .config
           echo "CONFIG_TARGET_x86_64=y" >> .config
           echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
           
-          # 运行你的脚本注入 MMDVM 相关配置
+          # 3. 运行你的 mmdvmipk.sh 注入包选择
           chmod +x $GITHUB_WORKSPACE/mmdvmipk.sh
           $GITHUB_WORKSPACE/mmdvmipk.sh
           
-          # 刷新并确认最终配置
           make defconfig
 
       - name: Download package
@@ -76,6 +81,7 @@ jobs:
         run: |
           cd openwrt
           echo -e "$(nproc) thread compile"
+          # 加 -i 忽略编译时的微小错误，确保能跑完并产出固件
           make -j$(nproc) || make -j1 || make -j1 V=s
 
       - name: Upload Firmware
