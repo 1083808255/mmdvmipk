@@ -1,0 +1,87 @@
+name: Build X86 MMDVM Firmware
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2004)
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone Asia/Shanghai
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+
+      - name: Clone source code
+        working-directory: /workdir
+        run: |
+          df -hT $PWD
+          # 克隆作者配置好的 immortalwrt 源码
+          git clone https://github.com/fndsz/immortalwrt-23.05.4 -b master openwrt
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+      - name: Load custom feeds and config
+        run: |
+          cd openwrt
+          [ -e $GITHUB_WORKSPACE/feeds.conf.default ] && mv $GITHUB_WORKSPACE/feeds.conf.default feeds.conf.default
+          
+          # 运行作者的脚本1（拉取MMDVM源码，打补丁等）
+          chmod +x $GITHUB_WORKSPACE/diy-part1.sh
+          $GITHUB_WORKSPACE/diy-part1.sh
+          
+          # 更新依赖源
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Load configuration and run script 2
+        run: |
+          cd openwrt
+          
+          # 核心改动：使用刚才改过的 76x8.config 作为基础，但强行覆盖为 X86 架构
+          cp $GITHUB_WORKSPACE/76x8.config .config
+          
+          # 覆盖架构为 X86_64
+          sed -i 's/CONFIG_TARGET_ramips=y/# CONFIG_TARGET_ramips is not set/' .config
+          sed -i 's/CONFIG_TARGET_ramips_mt76x8=y/# CONFIG_TARGET_ramips_mt76x8 is not set/' .config
+          echo "CONFIG_TARGET_x86=y" >> .config
+          echo "CONFIG_TARGET_x86_64=y" >> .config
+          echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
+          
+          # 运行作者的脚本2（处理各种特殊依赖和打包逻辑）
+          chmod +x $GITHUB_WORKSPACE/mmdvmipk.sh
+          $GITHUB_WORKSPACE/mmdvmipk.sh
+          
+          # 自动生成最终配置
+          make defconfig
+
+      - name: Download package
+        run: |
+          cd openwrt
+          make download -j8
+
+      - name: Compile the firmware
+        run: |
+          cd openwrt
+          echo -e "$(nproc) thread compile"
+          make -j$(nproc) || make -j1 V=s
+
+      - name: Upload Firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt-X86-MMDVM-Firmware
+          # 提取最终的刷机包
+          path: openwrt/bin/targets/x86/64/*.img.gz
